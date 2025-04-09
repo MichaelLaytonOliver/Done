@@ -14,9 +14,3 @@ for _ in range(100):
     turtle.forward(length)
     turtle.right(angle)
     turtle.circle(circle)
-        
-
-        
-    
-
-

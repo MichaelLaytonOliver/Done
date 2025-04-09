@@ -1,33 +1,46 @@
 from djitellopy import Tello
 import time
-import cv2
 import threading
+import cv2
+
+# Initialize the Tello drone
+tello = Tello()
+
+# Connect to the drone
 
 
 
 def show_camera_frames():
     # Shows the camera frames through cv2
     while True:
-        frame = tello.get_frame_read().frame
-        cv2.imshow("Frame", frame)
+        frame_read = tello.get_frame_read().frame
+        cv2.imshow("frame", frame_read)
         # While it is running, cv2 gets the current frame on the camera and outputs it to a window
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     cv2.destroyAllWindows()
+    
+tello.connect()
+
+time.sleep(1)
+tello.streamon()
+time.sleep(2) 
 
 
-def main():
-    # Initialize the Tello drone
-    tello = Tello()
+t1 = threading.Thread(target=show_camera_frames)
 
-    # Connect to the drone
-    tello.connect()
 
-    tello.streamon()
-    frame_read = tello.get_frame_read()
-    tello.takeoff()
-    t1 = threading.Thread(target=show_camera_frames, args=())
+t1.start()
+tello.takeoff()
 
-    time.sleep(15)
+time.sleep(5)
 
-    tello.land()
+tello.move_up(120)
+
+time.sleep(10)
+
+tello.move_forward(350)
+
+time.sleep(15)
+
+tello.end()
