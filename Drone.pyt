@@ -35,7 +35,11 @@ tello.takeoff()
 
 time.sleep(5)
 
-tello.move_up(120)
+tello.move_up(100)
+
+time.sleep(10)
+
+tello.move_right(40)
 
 time.sleep(10)
 
@@ -43,4 +47,23 @@ tello.move_forward(350)
 
 time.sleep(15)
 
-tello.end()
+tello.move_down(90)
+
+time.sleep(5)
+
+tello.move_left(90)
+
+time.sleep(5)
+
+tello.move_up(120)
+
+time.sleep(5)
+
+tello.flip_left()
+
+time.sleep(5)
+
+tello.move_left(50)
+
+
+tello.end() 
