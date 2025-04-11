@@ -7,8 +7,9 @@ import cv2
 tello = Tello()
 
 # Connect to the drone
-
-
+lower_blue = (100, 50, 50)
+upper_blue = (130, 255, 255)
+frame_read = tello.get_frame_read().frame
 
 def show_camera_frames():
     # Shows the camera frames through cv2
@@ -21,7 +22,7 @@ def show_camera_frames():
     cv2.destroyAllWindows()
     
 tello.connect()
-
+tello.takeoff()
 time.sleep(1)
 tello.streamon()
 time.sleep(2) 
@@ -31,14 +32,22 @@ t1 = threading.Thread(target=show_camera_frames)
 
 
 t1.start()
-tello.takeoff()
+
 tello.set_speed()
 time.sleep(5)
 
-tello.move_up(100)
 
-time.sleep(5)
+mask = cv2.inRange(hsv, lower_blue, upper_blue)
+result = cv2.bitwise_and(frame_read, frame_read, mask=mask)
 
-tello.rotate_clockwise(720)
+contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            (x, y), radius = cv2.minEnclosingCircle(largest_contour)
+            center = (int(x), int(y))
+            radius = int(radius)
+            cv2.circle(frame_read, center, radius, (0, 255, 0), 2)
+
+cv2.imshow("Color Detection", frame_read)
 
 tello.end() 
