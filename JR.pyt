@@ -9,7 +9,11 @@ os.environ["SDL_VIDEODRIVER"] = "dummy"
 # Connect to Tello
 tello = Tello()
 tello.connect()
+print(f"Battery: {tello.get_battery()}%")
 tello.streamon()
+time.sleep(2)
+
+# Initialize frame reader after streamon()
 frame_read = tello.get_frame_read()
 
 # Define blue color range for detection
@@ -23,102 +27,112 @@ pygame.display.set_caption("Tello Control")
 
 try:
     tello.takeoff()
+except Exception as e:
+    print(f"Takeoff failed: {e}. Retrying in 2 seconds...")
     time.sleep(2)
+    tello.takeoff()
 
-    tello.send_rc_control(0, 0, 0, 0)
+tello.send_rc_control(0, 0, 0, 0)
 
-    auto_mode = True  # Toggle for autonomous behavior
+auto_mode = True  # Toggle for autonomous behavior
 
-    while True:
-        frame = frame_read.frame
-        if frame is None:
-            continue
+while True:
+    frame = frame_read.frame
+    if frame is None:
+        print("Failed to get frame. Retrying...")
+        time.sleep(0.1)  # Ensure we don't overwhelm the drone with requests
+        continue
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, lower_blue, upper_blue)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Process the frame
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        center = None
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            (x, y), radius = cv2.minEnclosingCircle(largest_contour)
-            center = (int(x), int(y))
-            radius = int(radius)
-            if radius > 10:
-                cv2.circle(frame, center, radius, (0, 255, 0), 2)
+    center = None
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        (x, y), radius = cv2.minEnclosingCircle(largest_contour)
+        center = (int(x), int(y))
+        radius = int(radius)
+        if radius > 10:
+            cv2.circle(frame, center, radius, (0, 255, 0), 2)
 
-        # Velocities
-        left_right_velocity = 0
-        forward_backward_velocity = 0
-        up_down_velocity = 0
-        yaw_velocity = 0
+    # Velocities
+    left_right_velocity = 0
+    forward_backward_velocity = 0
+    up_down_velocity = 0
+    yaw_velocity = 0
 
-        if auto_mode and center:
-            frame_center_x = frame.shape[1] // 2
-            frame_center_y = frame.shape[0] // 2
-            dx = center[0] - frame_center_x
-            dy = center[1] - frame_center_y
+    if auto_mode and center:
+        frame_center_x = frame.shape[1] // 2
+        frame_center_y = frame.shape[0] // 2
+        dx = center[0] - frame_center_x
+        dy = center[1] - frame_center_y
 
-            threshold = 30  # Only move if offset is bigger than this
-            k = 0.3  # Proportional control constant
+        threshold = 30  # Only move if offset is bigger than this
+        k = 0.3  # Proportional control constant
 
-            if abs(dx) > threshold:
-                left_right_velocity = int(k * dx)
-            if abs(dy) > threshold:
-                forward_backward_velocity = int(-k * dy)
+        # Yaw to rotate toward the target instead of strafing
+        if abs(dx) > threshold:
+            yaw_velocity = int(k * dx)
 
-            # Clamp velocities
-            left_right_velocity = max(-30, min(30, left_right_velocity))
-            forward_backward_velocity = max(-30, min(30, forward_backward_velocity))
+        # Forward/backward to keep distance
+        if abs(dy) > threshold:
+            forward_backward_velocity = int(-k * dy)
 
-            print(f"[AUTO] Moving to center. dx={dx}, dy={dy} => LR: {left_right_velocity}, FB: {forward_backward_velocity}")
+        # Clamp velocities
+        yaw_velocity = max(-30, min(30, yaw_velocity))
+        forward_backward_velocity = max(-30, min(30, forward_backward_velocity))
 
-        # Manual override
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                raise KeyboardInterrupt
+        print(f"[AUTO] Tracking color. dx={dx}, dy={dy} => YAW: {yaw_velocity}, FB: {forward_backward_velocity}")
 
-        keys = pygame.key.get_pressed()
-        if any(keys):
-            auto_mode = False  # Turn off auto if manual keys pressed
+    # Manual override
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise KeyboardInterrupt
 
-            if keys[pygame.K_w]:
-                forward_backward_velocity = 30
-            elif keys[pygame.K_s]:
-                forward_backward_velocity = -30
+    keys = pygame.key.get_pressed()
+    if any(keys):
+        auto_mode = False  # Turn off auto if manual keys pressed
 
-            if keys[pygame.K_a]:
-                left_right_velocity = -30
-            elif keys[pygame.K_d]:
-                left_right_velocity = 30
+        if keys[pygame.K_w]:
+            forward_backward_velocity = 30
+        elif keys[pygame.K_s]:
+            forward_backward_velocity = -30
 
-            if keys[pygame.K_UP]:
-                up_down_velocity = 30
-            elif keys[pygame.K_DOWN]:
-                up_down_velocity = -30
+        if keys[pygame.K_a]:
+            left_right_velocity = -30
+        elif keys[pygame.K_d]:
+            left_right_velocity = 30
 
-            if keys[pygame.K_LEFT]:
-                yaw_velocity = -30
-            elif keys[pygame.K_RIGHT]:
-                yaw_velocity = 30
+        if keys[pygame.K_UP]:
+            up_down_velocity = 30
+        elif keys[pygame.K_DOWN]:
+            up_down_velocity = -30
 
-            if keys[pygame.K_ESCAPE]:
-                raise KeyboardInterrupt
+        if keys[pygame.K_LEFT]:
+            yaw_velocity = -30
+        elif keys[pygame.K_RIGHT]:
+            yaw_velocity = 30
 
-            print(f"[MANUAL] LR: {left_right_velocity}, FB: {forward_backward_velocity}, UD: {up_down_velocity}, YAW: {yaw_velocity}")
+        if keys[pygame.K_ESCAPE]:
+            raise KeyboardInterrupt
 
-        tello.send_rc_control(
-            left_right_velocity,
-            forward_backward_velocity,
-            up_down_velocity,
-            yaw_velocity
-        )
+        print(f"[MANUAL] LR: {left_right_velocity}, FB: {forward_backward_velocity}, UD: {up_down_velocity}, YAW: {yaw_velocity}")
 
-        cv2.imshow("Color Detection", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    tello.send_rc_control(
+        left_right_velocity,
+        forward_backward_velocity,
+        up_down_velocity,
+        yaw_velocity
+    )
 
-        time.sleep(0.05)
+    # Show frame for color detection
+    cv2.imshow("Color Detection", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+    time.sleep(0.05)
 
 except KeyboardInterrupt:
     print("Keyboard interrupt received. Landing drone...")
