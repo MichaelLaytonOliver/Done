@@ -24,12 +24,7 @@ pygame.display.set_caption("Tello Control")
 
 try:
     tello.takeoff()
-    time.sleep(2)
-    tello.move_up(240)
-    time.sleep(10)
-    tello.move_down(240)
-    time.sleep(2)
-    tello.send_rc_control(0, 0, 0, 0)
+    #
 
     auto_mode = True  # Toggle for autonomous behavior
 
