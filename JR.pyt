@@ -12,6 +12,7 @@ tello.connect()
 tello.streamon()
 frame_read = tello.get_frame_read()
 
+
 # Define blue color range for detection
 lower_blue = (100, 50, 50)
 upper_blue = (130, 255, 255)
@@ -24,7 +25,10 @@ pygame.display.set_caption("Tello Control")
 try:
     tello.takeoff()
     time.sleep(2)
-
+    tello.move_up(240)
+    time.sleep(10)
+    tello.move_down(240)
+    time.sleep(2)
     tello.send_rc_control(0, 0, 0, 0)
 
     auto_mode = True  # Toggle for autonomous behavior
