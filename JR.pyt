@@ -60,6 +60,7 @@ try:
                 tello.move_left(20)
             elif center[0] > frame_center_x + 50:
                 tello.move_right(20)
+                
 
         # Manual control with joystick
         if joystick:
