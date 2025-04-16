@@ -53,6 +53,10 @@ except Exception as e:
 tello.send_rc_control(0, 0, 0, 0)
 
 auto_mode = True
+# Sequence of hula hoop colors to detect (in order)
+target_color_sequence = [
+    "Purple", "Orange", "Yellow", "Orange","Blue", "Red", "Purple", "Green","Red", "Yellow", "Blue", "Green"]
+sequence_index = 0  # Start with first color
 
 try:
     while True:
@@ -108,11 +112,11 @@ try:
             dy = center[1] - frame_center_y  # Vertical distance from the center of the frame
 
             # Ideal radius and other tuning parameters
-            ideal_radius = 40
+            ideal_radius = 45
             radius_error = radius - ideal_radius
             threshold = 5  # Minimum pixel deviation to trigger yaw control
-            k_pos = 0.5  # Yaw sensitivity coefficient (adjust to control rotation speed)
-            k_radius = 0.7  # Forward/backward control sensitivity
+            k_pos = 45  # Yaw sensitivity coefficient (adjust to control rotation speed)
+            k_radius = 1  # Forward/backward control sensitivity
 
             if distance_cm < 5:
                 # Too close, back up slowly
@@ -186,8 +190,100 @@ try:
         battery = tello.get_battery()
         cv2.putText(frame, f"Battery: {battery}%", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Define additional color HSV ranges (adjust as needed)
+        color_ranges = {
+            "Purple": ((125, 50, 50), (150, 255, 255)),
+            "Orange": ((10, 100, 100), (25, 255, 255)),
+            "Yellow": ((25, 100, 100), (35, 255, 255)),
+            "Red": ((0, 100, 100), (10, 255, 255)),
+            "Blue": ((100, 100, 100), (130, 255, 255)),
+            "Green": ((40, 50, 50), (80, 255, 255))
+        }
+
+        # Keep track of detections
+        if 'color_detection_count' not in locals():
+            color_detection_count = {}
+        if 'last_detected_color' not in locals():
+            last_detected_color = None
+
+        # Keep track of visible colors from the last frame
+        if 'prev_visible_colors' not in locals():
+            prev_visible_colors = set()
+
+        current_visible_colors = set()
+
+# Define your target sequence (in order)
+        target_sequence = ["Purple", "Orange", "Yellow", "Orange", "Blue", "Red", "Purple", "Green", "Red", "Yellow", "Blue", "Green"]
+        current_target_index = 0
+
+        # Define expected color detection sequence
+        detection_sequence = [
+            "Purple", "Orange", "Yellow", "Orange", "Blue", "Red",
+            "Purple", "Green", "Red", "Yellow", "Blue", "Green"
+        ]
+
+        if 'current_target_index' not in locals():
+            current_target_index = 0
+
+        # Color to LED RGB mapping
+        color_to_led = {
+            "Purple": (127, 0, 255),   # Magenta
+            "Orange": (255, 165, 0),
+            "Yellow": (255, 255, 0),
+            "Red": (255, 0, 0),
+            "Blue": (0, 0, 255),
+            "Green": (0, 255, 0)
+        }
+
+        target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
+
+        with open("detected_colors.txt", "a") as f:
+            for color_name, (lower, upper) in color_ranges.items():
+                if color_name != target_color:
+                    continue  # Skip if it's not the current target
+
+                color_mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+                color_contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                if not color_contours:
+                    continue
+                
+                largest_color_contour = max(color_contours, key=cv2.contourArea)
+                (_, _), color_radius = cv2.minEnclosingCircle(largest_color_contour)
+                distance_cm = estimate_distance_cm(color_radius)
+
+                if distance_cm <= 60:
+                    # Log and update progress if this is the correct color in sequence
+                    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                    f.write(f"{timestamp} - {color_name} detected (Sequence {current_target_index+1}/{len(detection_sequence)})\n")
+                    print(f"[SEQUENCE] {color_name} hoop detected in order ({current_target_index+1}/{len(detection_sequence)})")
+
+                    # Set LED color based on hoop
+                    r, g, b = color_to_led[color_name]
+                    tello.set_led(r, g, b, 2, 2)  # Flash LED with that color
+
+                    current_target_index += 1  # Move to next hoop
+
+                    # Small delay but keep checking next hoop
+                start = time.time()
+                while time.time() - start < 1.5:
+                    frame = frame_read.frame  # Refresh frame
+                    continue  # Just wait out delay, but don't let detection repeat for same hoop
+                
+
+
+
+                    current_visible_colors.add(color_name)  # Only mark as visible if within range
+                if sequence_index < len(target_color_sequence):
+                            cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+
 
         cv2.imshow("Color Detection", frame)
+        
+
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
