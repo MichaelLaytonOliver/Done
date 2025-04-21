@@ -7,9 +7,13 @@ from tkinter import messagebox
 import threading
 from threading import Lock
 
-# === Webcam Init ===
-cap = cv2.VideoCapture(0)
-is_flying = False
+# === Tello Init ===
+tello = Tello()
+tello.connect()
+print(f"[TELLO] Battery: {tello.get_battery()}%")
+
+tello.streamon()
+cap = tello.get_frame_read()
 
 # === Color Sequence ===
 color_to_led = {
@@ -96,7 +100,9 @@ hoop_was_detected = False
 try:
     while True:
         now = time.time()
-        ret, frame = cap.read()
+        frame = cap.frame
+        ret = frame is not None
+        
         if not ret or frame is None:
             continue
 
@@ -164,8 +170,8 @@ try:
                     approval_handler.last_detection_time = time.time()
                     hoop_was_detected = False
                 last_hoop_visible = False
-            
-            
+
+
         
         if approval_handler.result is not None:
             if approval_handler.result:
