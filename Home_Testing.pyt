@@ -27,6 +27,9 @@ detection_sequence = [
     "red", "yellow", "blue", "green"
 ]
 current_target_index = 0
+green_count = 0
+reversing = False
+
 
 # === Robust HSV Color Ranges ===
 color_ranges = {
@@ -63,9 +66,12 @@ class ApprovalHandler:
         with self.lock:
             if self.waiting:
                 return
+            if self.result is not None:  # Don't ask again if already handled
+                return
             self.result = None
             self.waiting = True
         threading.Thread(target=self._popup, args=(color,), daemon=True).start()
+
 
     def _popup(self, color):
         def run_popup():
@@ -82,6 +88,9 @@ class ApprovalHandler:
         root.mainloop()
 
 approval_handler = ApprovalHandler()
+last_hoop_visible = False
+hoop_was_detected = False
+
 
 # === Main Loop ===
 try:
@@ -110,16 +119,14 @@ try:
 
         # === Hoop Detection ===
         target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
-        if target_color and now - time.time() > 2:
-            lower = np.array(color_ranges[target_color])
-            upper = lower
-            color_mask = cv2.inRange(hsv, lower, upper)
-            contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-                    # === Hoop Detection with HSV Ranges ===
-        if target_color and now - time.time() > 2:
+        
+        # Delay between detections (in seconds)
+        if not hasattr(approval_handler, 'last_detection_time'):
+            approval_handler.last_detection_time = 0
+        
+        if target_color and time.time() - approval_handler.last_detection_time > 2:
             lower, upper = color_ranges[target_color]
-
+        
             if target_color == 'red':
                 lower1 = np.array([0, 120, 70])
                 upper1 = np.array([10, 255, 255])
@@ -130,35 +137,61 @@ try:
                 color_mask = cv2.bitwise_or(mask1, mask2)
             else:
                 color_mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-
+        
+            contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
             if contours:
                 largest = max(contours, key=cv2.contourArea)
                 (x, y), r = cv2.minEnclosingCircle(largest)
                 dist = estimate_distance_cm(r)
-
+        
                 center = (int(x), int(y))
                 radius = int(r)
                 distance_cm = dist
-
+        
                 if radius > 10:
                     cv2.circle(frame, center, radius, (0, 255, 255), 2)
                     cv2.putText(frame, f"{target_color} {int(dist)}cm", (center[0]-20, center[1]-radius-10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                if dist >= 60 and not approval_handler.waiting:
-                    print(f"[DETECTED] {target_color} hoop. Awaiting user confirmation...")
+        
+            if radius > 10 and distance_cm >= 60:
+                hoop_was_detected = True
+                last_hoop_visible = True
+            else:
+                if last_hoop_visible and hoop_was_detected and not approval_handler.waiting and approval_handler.result is None:
+                    print(f"[POPUP TRIGGERED] {target_color} hoop disappeared. Awaiting user confirmation...")
                     approval_handler.ask(target_color)
+                    approval_handler.last_detection_time = time.time()
+                    hoop_was_detected = False
+                last_hoop_visible = False
+            
+            
+        
+        if approval_handler.result is not None:
+            if approval_handler.result:
+                timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                with open("detected_colors.txt", "a") as f:
+                    f.write(f"{timestamp} - {target_color} detected (Sequence {current_target_index+1}/{len(detection_sequence)})\n")
 
-            if not approval_handler.waiting and approval_handler.result is not None:
-                if approval_handler.result:
-                    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-                    with open("detected_colors.txt", "a") as f:
-                        f.write(f"{timestamp} - {target_color} detected (Sequence {current_target_index+1}/{len(detection_sequence)})\n")
-                    print(f"[SEQUENCE APPROVED] {target_color} confirmed ({current_target_index+1}/{len(detection_sequence)})")
-                    current_target_index += 1
-                else:
-                    print(f"[SEQUENCE REJECTED] {target_color} detection denied. Retrying...")
-                approval_handler.result = None
+                print(f"[SEQUENCE APPROVED] {target_color} confirmed ({current_target_index+1}/{len(detection_sequence)})")
+
+                if target_color == "green":
+                    green_count += 1
+
+                current_target_index += 1
+
+                if green_count == 2 and not reversing:
+                    reversing = True
+                    detection_sequence = detection_sequence[::-1]
+                    current_target_index = 0
+                    print("[SEQUENCE] Green detected twice. Reversing sequence and starting over.")
+            else:
+                print(f"[SEQUENCE REJECTED] {target_color} detection denied. Retrying...")
+
+            approval_handler.result = None  # ✅ Only clear after handling
+
+
+                
 
         # === Display info ===
         if keyboard.is_pressed('p'):
