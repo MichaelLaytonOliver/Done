@@ -289,8 +289,6 @@ try:
             last_rc_command_time = now
 
         battery = tello.get_battery()
-
-                # === Battery Indicator Positioning (Top-Right Corner) ===
         # === Battery Indicator Positioning (Top-Right Corner) ===
         frame_height, frame_width = frame.shape[:2]
         width, height = 100, 30
@@ -320,6 +318,10 @@ try:
 
         # Show frame with battery info
         cv2.imshow("Color Detection", frame)
+        
+        if current_target_index < len(detection_sequence):
+            cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
         # Quit when 'x' is pressed
         if cv2.waitKey(1) & 0xFF == ord('x'):
