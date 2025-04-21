@@ -320,8 +320,23 @@ try:
         cv2.imshow("Color Detection", frame)
         
         if current_target_index < len(detection_sequence):
+            target_color = detection_sequence[current_target_index]
+            # Define a dictionary with color names as keys and BGR values as values
+            color_dict = {
+                'purple': (148, 0, 211),   # BGR for purple
+                'orange': (0, 165, 255),   # BGR for orange
+                'yellow': (0, 255, 255),   # BGR for yellow
+                'blue': (255, 0, 0),       # BGR for blue
+                'red': (0, 0, 255),        # BGR for red
+                'green': (0, 255, 0)       # BGR for green
+            }
+
+            # Get the color for the current target hoop
+            text_color = color_dict.get(target_color, (0, 255, 255))  # Default to yellow if color not found
+
+            # Display the next hoop with the appropriate color
             cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2)
 
         # Quit when 'x' is pressed
         if cv2.waitKey(1) & 0xFF == ord('x'):
