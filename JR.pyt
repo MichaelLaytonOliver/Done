@@ -3,6 +3,10 @@ import cv2
 import numpy as np
 from djitellopy import Tello
 import keyboard
+import tkinter as tk
+from tkinter import messagebox
+import threading
+from threading import Lock
 
 # === Drone Init ===
 tello = Tello()
@@ -60,6 +64,39 @@ last_rc_command_time = 0
 rc_send_interval = 0.01
 last_l_press_time = 0
 
+
+# Thread-safe approval popup handler
+class ApprovalHandler:
+    def __init__(self):
+        self.result = None
+        self.waiting = False
+        self.lock = Lock()
+
+    def ask(self, color):
+        with self.lock:
+            if self.waiting:
+                return  # Prevent multiple popups
+            self.result = None
+            self.waiting = True
+        threading.Thread(target=self._popup, args=(color,), daemon=True).start()
+
+    def _popup(self, color):
+        def run_popup():
+            result = messagebox.askyesno("Hoop Detection", f"Detected {color} hoop.\nApprove detection?")
+            with self.lock:
+                self.result = result
+                self.waiting = False
+            root.quit()
+            root.destroy()
+
+        root = tk.Tk()
+        root.withdraw()
+        root.after(0, run_popup)
+        root.mainloop()
+
+# Initialize once here
+approval_handler = ApprovalHandler()
+
 try:
     while True:
         now = time.time()
@@ -67,6 +104,11 @@ try:
         if frame is None:
             print("No frame detected.")
             continue
+        # Fix for null frame safety
+        frame = frame_read.frame
+        if frame is None or frame.shape[0] == 0 or frame.shape[1] == 0:
+            continue
+        
 
         # === HSV Trackbar Detection ===
         h_min = cv2.getTrackbarPos("H Min", "Trackbars")
@@ -86,19 +128,45 @@ try:
         radius = 0
         distance_cm = float('inf')
 
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            (x, y), radius = cv2.minEnclosingCircle(largest_contour)
-            center = (int(x), int(y))
-            radius = int(radius)
-            distance_cm = estimate_distance_cm(radius)
+        # === Hoop Detection (Non-blocking) ===
+        target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
+        if target_color and now - last_color_detection_time > 2:
+            lower, upper = color_ranges[target_color]
+            color_mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+            contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            if radius > 10 and distance_cm <= 120:
-                cv2.circle(frame, center, radius, (0, 255, 0), 2)
-                cv2.putText(frame, f"{int(distance_cm)}cm", (center[0], center[1] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            else:
-                center = None
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                (x, y), r = cv2.minEnclosingCircle(largest)
+                dist = estimate_distance_cm(r)
+
+                center = (int(x), int(y))
+                radius = int(r)
+                distance_cm = dist
+
+                if radius > 10:
+                    cv2.circle(frame, center, radius, (0, 255, 255), 2)
+                    cv2.putText(frame, f"{target_color} {int(dist)}cm", (center[0]-20, center[1]-radius-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                if dist <= 60 and not approval_handler.waiting:
+                    tello.send_rc_control(0, 0, 0, 0)
+                    print(f"[DETECTED] {target_color} hoop. Awaiting user confirmation...")
+                    approval_handler.ask(target_color)
+                    last_color_detection_time = now
+
+                # Prevent race condition: only handle result when not waiting anymore
+            if not approval_handler.waiting and approval_handler.result is not None:
+                if approval_handler.result:
+                    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                    with open("detected_colors.txt", "a") as f:
+                        f.write(f"{timestamp} - {target_color} detected (Sequence {current_target_index+1}/{len(detection_sequence)})\n")
+                    print(f"[SEQUENCE APPROVED] {target_color} confirmed ({current_target_index+1}/{len(detection_sequence)})")
+                    current_target_index += 1
+                else:
+                    print(f"[SEQUENCE REJECTED] {target_color} detection denied. Retrying...")
+                approval_handler.result = None
+
 
         # === Movement Variables ===
         left_right_velocity = 0
@@ -135,79 +203,106 @@ try:
 
             print(f"[AUTO] dx={dx}, dy={dy}, r={radius}, dist={int(distance_cm)} => "f"YAW: {yaw_velocity}, UD: {up_down_velocity}, FB: {forward_backward_velocity}")
 
-        # === Keyboard Controls (Work Always) ===
-        if keyboard.is_pressed('q'):
-            raise KeyboardInterrupt
+        # === Keyboard Controls ===
+        speed_multiplier = 1.5 if keyboard.is_pressed('shift') or keyboard.is_pressed('right shift') else 1
+        base_speed_fb_lr = int(60 * speed_multiplier)
+        base_speed_ud_yaw = int(100 * speed_multiplier)
+
+        if keyboard.is_pressed('p'):
+            with open("detected_colors.txt", "w") as f:
+                f.write("")
+            print("[FILE] detected_colors.txt has been cleared.")
+            time.sleep(0.5)
 
         if keyboard.is_pressed('w'):
-            forward_backward_velocity = 60
+            forward_backward_velocity = base_speed_fb_lr
         elif keyboard.is_pressed('s'):
-            forward_backward_velocity = -60
+            forward_backward_velocity = -base_speed_fb_lr
 
         if keyboard.is_pressed('a'):
-            left_right_velocity = -60
+            left_right_velocity = -base_speed_fb_lr
         elif keyboard.is_pressed('d'):
-            left_right_velocity = 60
+            left_right_velocity = base_speed_fb_lr
 
         if keyboard.is_pressed('up'):
-            up_down_velocity = 100
+            up_down_velocity = base_speed_ud_yaw
         elif keyboard.is_pressed('down'):
-            up_down_velocity = -100
+            up_down_velocity = -base_speed_ud_yaw
 
         if keyboard.is_pressed('left'):
-            yaw_velocity = -100
+            yaw_velocity = -base_speed_ud_yaw
         elif keyboard.is_pressed('right'):
-            yaw_velocity = 100
+            yaw_velocity = base_speed_ud_yaw
 
-        if keyboard.is_pressed('f'):
-            tello.flip_forward()
-            time.sleep(1)
-            
         if keyboard.is_pressed('l') and time.time() - last_l_press_time > 2:
-            if is_flying == False:
-                print("[COMMAND] Landing...")
+            if not is_flying:
+                print("[COMMAND] Taking off...")
                 tello.takeoff()
                 is_flying = True
-            if is_flying == True:
-                print("[COMMAND] Taking off...")
+            else:
+                print("[COMMAND] Landing...")
                 tello.land()
                 is_flying = False
-                last_l_press_time = time.time()
-        
+            last_l_press_time = time.time()
 
         if keyboard.is_pressed('m') and now - last_auto_toggle_time > 1:
             auto_mode = not auto_mode
             print(f"[MODE] Auto mode {'ON' if auto_mode else 'OFF'}")
             last_auto_toggle_time = now
 
-        # === RC Command Send Timing ===
+        if keyboard.is_pressed('t'):
+            test_color = detection_sequence[current_target_index]
+            lower, upper = color_ranges[test_color]
+            test_mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+            cv2.imshow(f"{test_color.upper()} Mask", test_mask)
+            
+        # Add a timestamp for flip command
+            last_flip_time = 0
+            flip_cooldown = 1  # 1 second cooldown between flips
+
+            if keyboard.is_pressed('f') and time.time() - last_flip_time > flip_cooldown:
+                tello.flip_back()  # Perform a forward flip
+                last_flip_time = time.time()  # Update the last flip time
+                print("[COMMAND] Flip executed")
+
+
+
         if now - last_rc_command_time > rc_send_interval:
             tello.send_rc_control(left_right_velocity, forward_backward_velocity, up_down_velocity, yaw_velocity)
             last_rc_command_time = now
 
-        # === Hoop Detection (Non-blocking) ===
-        target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
-        if target_color and now - last_color_detection_time > 2:
-            lower, upper = color_ranges[target_color]
-            color_mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-            contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                (_, _), r = cv2.minEnclosingCircle(largest)
-                dist = estimate_distance_cm(r)
-                if dist <= 60:
-                    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-                    with open("detected_colors.txt", "a") as f:
-                        f.write(f"{timestamp} - {target_color} detected (Sequence {current_target_index+1}/{len(detection_sequence)})\n")
-                    print(f"[SEQUENCE] {target_color} hoop detected in order ({current_target_index+1}/{len(detection_sequence)})")
-                    current_target_index += 1
-                    last_color_detection_time = now
-
-        # === UI Overlays ===
         battery = tello.get_battery()
-        cv2.putText(frame, f"Battery: {battery}%", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+                # === Battery Indicator Positioning (Top-Right Corner) ===
+       # === Battery Indicator Positioning (Top-Right Corner) ===
+        frame_height, frame_width = frame.shape[:2]
+        width, height = 100, 30
+        cap_width = 6
+        margin = 20
+        x = frame_width - width - cap_width - margin
+        y = frame_height - height - margin  # Lower the battery indicator by changing this value
+        
+        # Choose color based on battery percentage
+        if battery >= 50:
+            color = (0, 255, 0)       # Green
+        elif battery >= 20:
+            color = (0, 255, 255)     # Yellow
+        else:
+            color = (0, 0, 255)       # Red
+        
+        # Draw battery outline
+        cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 0, 0), 2)
+        # Draw battery cap
+        cv2.rectangle(frame, (x + width, y + height // 4), (x + width + cap_width, y + 3 * height // 4), (0, 0, 0), -1)
+        # Fill battery based on charge
+        fill_width = int((battery / 100) * width)
+        cv2.rectangle(frame, (x, y), (x + fill_width, y + height), color, -1)
+        # Label battery %
+        cv2.putText(frame, f"{battery}%", (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+
+        
 
         if current_target_index < len(detection_sequence):
             cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
