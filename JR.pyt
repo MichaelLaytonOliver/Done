@@ -34,8 +34,8 @@ detection_sequence = [
 current_target_index = 0
 
 color_ranges = {
-    'purple': ([120, 50, 50], [150, 255, 255]),
-    'orange': ([10, 100, 100], [25, 255, 255]),
+    'purple': ([120, 50, 255], [162, 0, 255]),
+    'orange': ([255, 213, 0], [25, 255, 255]),
     'yellow': ([25, 100, 100], [35, 255, 255]),
     'red': ([0, 120, 70], [10, 255, 255]),
     'blue': ([100, 150, 0], [140, 255, 255]),
@@ -274,7 +274,7 @@ try:
         battery = tello.get_battery()
 
                 # === Battery Indicator Positioning (Top-Right Corner) ===
-       # === Battery Indicator Positioning (Top-Right Corner) ===
+        # === Battery Indicator Positioning (Top-Right Corner) ===
         frame_height, frame_width = frame.shape[:2]
         width, height = 100, 30
         cap_width = 6

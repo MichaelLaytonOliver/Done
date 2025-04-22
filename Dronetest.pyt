@@ -2,8 +2,7 @@ from djitellopy import Tello
 import time
 import threading
 import cv2
- 
- 
+
 tello = Tello()
 
 # Connect to the drone
