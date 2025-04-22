@@ -13,31 +13,31 @@ tello = Tello()
 tello.connect()
 print(f"[TELLO] Battery: {tello.get_battery()}%")
 tello.streamon()
+tello.takeoff()
 cap = tello.get_frame_read()
 
-# === Tello flying flag ===
-is_flying = False
+# === Flags & State ===
+is_flying = True
+auto_mode = True
+rc_send_interval = 0.05
+last_rc_command_time = time.time()
+last_l_press_time = time.time()
+last_auto_toggle_time = time.time()
 
-# === Color Sequence ===
-color_to_led = {
-    'purple': (148, 0, 211),
-    'orange': (255, 165, 0),
-    'yellow': (255, 255, 0),
-    'blue': (0, 0, 255),
-    'red': (255, 0, 0),
-    'green': (0, 255, 0)
-}
+# === Velocity Placeholders ===
+left_right_velocity = 0
+forward_backward_velocity = 0
+up_down_velocity = 0
+yaw_velocity = 0
 
-detection_sequence = [
-    "purple", "orange", "yellow", "orange",
-    "blue", "red", "purple", "green",
-    "red", "yellow", "blue", "green"
-]
+# === Detection Configs ===
+detection_sequence = ["purple", "orange", "yellow", "orange", "blue", "red", "purple", "green", "red", "yellow", "blue", "green"]
 current_target_index = 0
 green_count = 0
 reversing = False
+last_hoop_visible = False
 
-# === Robust HSV Color Ranges ===
+# === HSV Color Ranges ===
 color_ranges = {
     'purple': ((125, 50, 50), (160, 255, 255)),
     'orange': ((5, 150, 150), (20, 255, 255)),
@@ -46,9 +46,6 @@ color_ranges = {
     'blue':   ((90, 100, 100), (130, 255, 255)),
     'green':  ((35, 100, 100), (85, 255, 255))
 }
-
-def estimate_distance_cm(radius):
-    return 5000 / radius if radius > 0 else float('inf')
 
 # === Trackbars ===
 cv2.namedWindow("Trackbars")
@@ -59,12 +56,13 @@ cv2.createTrackbar("H Max", "Trackbars", 179, 179, lambda x: None)
 cv2.createTrackbar("S Max", "Trackbars", 255, 255, lambda x: None)
 cv2.createTrackbar("V Max", "Trackbars", 255, 255, lambda x: None)
 
-# === Thread-safe Approval Handler ===
+# === Approval Handler ===
 class ApprovalHandler:
     def __init__(self):
         self.result = None
         self.waiting = False
         self.lock = Lock()
+        self.last_detection_time = 0  # Add this line
 
     def ask(self, color):
         with self.lock:
@@ -89,30 +87,20 @@ class ApprovalHandler:
         root.mainloop()
 
 approval_handler = ApprovalHandler()
-last_hoop_visible = False
-rc_send_interval = 0.01
-hoop_was_detected = False
 
-# === Initializing necessary variables ===
-now = time.time()
-last_l_press_time = now
-last_auto_toggle_time = now
-auto_mode = True
-last_rc_command_time = now
-
-left_right_velocity = 0
-forward_backward_velocity = 0
-up_down_velocity = 0
-yaw_velocity = 0
+# === Distance Estimation ===
+def estimate_distance_cm(radius):
+    return 5000 / radius if radius > 0 else float('inf')
 
 # === Main Loop ===
 try:
     while True:
         frame = cap.frame
-        ret = frame is not None
-        if not ret:
-            now = time.time()
+        if frame is None:
             continue
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
 
         # === HSV Trackbar Detection ===
         h_min = cv2.getTrackbarPos("H Min", "Trackbars")
@@ -124,17 +112,9 @@ try:
         lower_pink = np.array([h_min, s_min, v_min])
         upper_pink = np.array([h_max, s_max, v_max])
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
         # === Hoop Detection ===
-        target_color = detection_sequence[current_target_index] if current_target_index < len(detection_sequence) else None
-
-        if not hasattr(approval_handler, 'last_detection_time'):
-            approval_handler.last_detection_time = 0
-
         if target_color and time.time() - approval_handler.last_detection_time > 2:
             lower, upper = color_ranges[target_color]
-
             if target_color == 'red':
                 mask1 = cv2.inRange(hsv, np.array([0, 120, 70]), np.array([10, 255, 255]))
                 mask2 = cv2.inRange(hsv, np.array([170, 120, 70]), np.array([180, 255, 255]))
@@ -176,7 +156,6 @@ try:
 
                 print(f"[SEQUENCE APPROVED] {target_color} confirmed ({current_target_index+1}/{len(detection_sequence)})")
 
-                # === Tello actions ===
                 if not is_flying:
                     tello.takeoff()
                     is_flying = True
@@ -200,74 +179,37 @@ try:
 
             approval_handler.result = None
 
-        # === Auto Mode Logic ===
-        if 'center' in locals() and center:
-            if auto_mode and center:
-                frame_center_x = frame.shape[1] // 2
-                frame_center_y = frame.shape[0] // 2
-                dx = center[0] - frame_center_x
-                dy = center[1] - frame_center_y
-
-                ideal_radius = 45
-                radius_error = radius - ideal_radius
-                threshold = 10
-                k_pos = 0.2
-                k_radius = 0.5
-
-                if distance_cm < 30:
-                    forward_backward_velocity = -100
-                else:
-                    if abs(dx) > threshold:
-                        yaw_velocity = int(k_pos * dx)
-                    if abs(dy) > threshold:
-                        up_down_velocity = int(-k_pos * dy)
-                    if abs(radius_error) > 5:
-                        forward_backward_velocity = int(k_radius * radius_error)
-
-                yaw_velocity = max(-100, min(100, yaw_velocity))
-                up_down_velocity = max(-100, min(100, up_down_velocity))
-                forward_backward_velocity = max(-100, min(100, forward_backward_velocity))
-
-                print(f"[AUTO] dx={dx}, dy={dy}, r={radius}, dist={int(distance_cm)} => "f"YAW: {yaw_velocity}, UD: {up_down_velocity}, FB: {forward_backward_velocity}")
-
-
         # === Keyboard Controls ===
-        speed_multiplier = 1.5 if keyboard.is_pressed('shift') or keyboard.is_pressed('right shift') else 1
+        speed_multiplier = 1.5 if keyboard.is_pressed('shift') else 1
         base_speed_fb_lr = int(60 * speed_multiplier)
         base_speed_ud_yaw = int(100 * speed_multiplier)
 
-        if keyboard.is_pressed('p'):
-            with open("detected_colors.txt", "w") as f:
-                f.write("")
-            print("[FILE] detected_colors.txt has been cleared.")
-            time.sleep(0.5)
-
-        # Reset velocities if no keys are pressed
         left_right_velocity = 0
         forward_backward_velocity = 0
         up_down_velocity = 0
         yaw_velocity = 0
 
+        # Movement keys
         if keyboard.is_pressed('w'):
             forward_backward_velocity = base_speed_fb_lr
         elif keyboard.is_pressed('s'):
             forward_backward_velocity = -base_speed_fb_lr
-
         if keyboard.is_pressed('a'):
             left_right_velocity = -base_speed_fb_lr
         elif keyboard.is_pressed('d'):
             left_right_velocity = base_speed_fb_lr
-
         if keyboard.is_pressed('up'):
             up_down_velocity = base_speed_ud_yaw
         elif keyboard.is_pressed('down'):
             up_down_velocity = -base_speed_ud_yaw
-
         if keyboard.is_pressed('left'):
             yaw_velocity = -base_speed_ud_yaw
         elif keyboard.is_pressed('right'):
             yaw_velocity = base_speed_ud_yaw
+        elif keyboard.is_pressed(';'):
+            tello.flip_back()
 
+        # Takeoff / Land
         if keyboard.is_pressed('l') and time.time() - last_l_press_time > 2:
             if not is_flying:
                 print("[COMMAND] Taking off...")
@@ -279,14 +221,26 @@ try:
                 is_flying = False
             last_l_press_time = time.time()
 
-        if keyboard.is_pressed('m') and now - last_auto_toggle_time > 1:
+        # Mode Toggle
+        if keyboard.is_pressed('m') and time.time() - last_auto_toggle_time > 2:
             auto_mode = not auto_mode
-            print(f"[MODE] Auto mode {'ON' if auto_mode else 'OFF'}")
-            last_auto_toggle_time = now
+            print(f"[MODE] {'Auto' if auto_mode else 'Manual'} mode.")
+            last_auto_toggle_time = time.time()
 
-        if now - last_rc_command_time > rc_send_interval:
-            tello.send_rc_control(left_right_velocity, forward_backward_velocity, up_down_velocity, yaw_velocity)
-            last_rc_command_time = now
+        # Send velocity commands
+        if time.time() - last_rc_command_time > rc_send_interval:
+            if is_flying:
+                tello.send_rc_control(left_right_velocity, forward_backward_velocity, up_down_velocity, yaw_velocity)
+            last_rc_command_time = time.time()
+
+        # Display frame
+        cv2.imshow("Hoop Detection", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        if current_target_index < len(detection_sequence):
+                cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         battery = tello.get_battery()
         # === Battery Indicator Positioning (Top-Right Corner) ===
@@ -316,33 +270,6 @@ try:
         cv2.putText(frame, f"{battery}%", (x, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # Show frame with battery info
-        cv2.imshow("Color Detection", frame)
-        
-        if current_target_index < len(detection_sequence):
-            target_color = detection_sequence[current_target_index]
-            # Define a dictionary with color names as keys and BGR values as values
-            color_dict = {
-                'purple': (148, 0, 211),   # BGR for purple
-                'orange': (0, 165, 255),   # BGR for orange
-                'yellow': (0, 255, 255),   # BGR for yellow
-                'blue': (255, 0, 0),       # BGR for blue
-                'red': (0, 0, 255),        # BGR for red
-                'green': (0, 255, 0)       # BGR for green
-            }
-
-            # Get the color for the current target hoop
-            text_color = color_dict.get(target_color, (0, 255, 255))  # Default to yellow if color not found
-
-            # Display the next hoop with the appropriate color
-            cv2.putText(frame, f"Next Hoop: {target_color}", (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2)
-
-        # Quit when 'x' is pressed
-        if cv2.waitKey(1) & 0xFF == ord('x'):
-            break
-
 finally:
-    cap.stop()
+    tello.land()
     cv2.destroyAllWindows()
-    tello.end()
