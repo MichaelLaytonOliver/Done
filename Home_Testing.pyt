@@ -36,6 +36,7 @@ current_target_index = 0
 green_count = 0
 reversing = False
 last_hoop_visible = False
+last_flip_time = time.time() - 5  # allows flip immediately
 
 # === HSV Color Ranges ===
 color_ranges = {
@@ -206,8 +207,20 @@ try:
             yaw_velocity = -base_speed_ud_yaw
         elif keyboard.is_pressed('right'):
             yaw_velocity = base_speed_ud_yaw
-        elif keyboard.is_pressed(';'):
-            tello.flip_back()
+        if keyboard.is_pressed(';') and is_flying and time.time() - last_flip_time > 3:
+            if tello.get_battery() > 30 and tello.get_height() > 0:
+                try:
+                    print("[COMMAND] Backflip initiated...")
+                    tello.send_rc_control(0, 0, 0, 0)
+                    time.sleep(0.5)
+                    tello.flip_back()
+                    last_flip_time = time.time()
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"[ERROR] Flip failed: {e}")
+            else:
+                print("[WARNING] Flip aborted: low battery or altitude.")
+
 
         # Takeoff / Land
         if keyboard.is_pressed('l') and time.time() - last_l_press_time > 2:

@@ -1,0 +1,190 @@
+import time
+import cv2
+import numpy as np
+import socket
+import keyboard
+
+# === JEASOUM E58 Drone Class ===
+class JeasoumE58Drone:
+    def __init__(self, ip="192.168.10.1", port=8889):
+        self.ip = ip
+        self.port = port
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("", 8888))  # Binds to a local port for responses
+        self.flying = False
+        self.last_flip_time = time.time()
+        self.last_l_press_time = time.time()
+        self.auto_mode = False
+
+    def connect(self):
+        self.send_command("command")  # Assuming 'command' enters command mode (check if this works)
+        print("[JEASOUM E58] Connected to the drone.")
+        time.sleep(1)
+
+    def send_command(self, command):
+        self.socket.sendto(command.encode('utf-8'), (self.ip, self.port))
+        time.sleep(1)
+
+    def get_battery(self):
+        self.send_command("battery?")
+        battery = self.receive_response()
+        return battery.strip()
+
+    def get_frame(self):
+        # Placeholder frame (Replace with actual streaming logic if possible)
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder empty frame
+        return frame
+
+    def takeoff(self):
+        print("[JEASOUM E58] Sending takeoff command.")
+        self.send_command("takeoff")  # Adjust this based on the drone's actual command
+        time.sleep(2)  # Wait for takeoff command to be processed
+        status = self.receive_response()
+        print(f"[DEBUG] Takeoff command response: {status}")
+        if "ok" in status.lower():
+            self.flying = True
+            print("[JEASOUM E58] Takeoff successful!")
+        else:
+            print("[JEASOUM E58] Takeoff failed, retrying...")
+            self.send_command("takeoff")  # Retry takeoff
+            time.sleep(2)
+            status = self.receive_response()
+            print(f"[DEBUG] Retry takeoff command response: {status}")
+            if "ok" in status.lower():
+                self.flying = True
+                print("[JEASOUM E58] Takeoff successful on retry.")
+            else:
+                print("[JEASOUM E58] Takeoff failed again. Please check the drone.")
+
+    def land(self):
+        print("[JEASOUM E58] Sending land command.")
+        self.send_command("land")  # Adjust this based on the drone's actual command
+        self.flying = False
+        print("[JEASOUM E58] Landing initiated.")
+
+    def send_rc_control(self, lr, fb, ud, yaw):
+        rc_command = f"rc {lr} {fb} {ud} {yaw}"  # Adjust based on the drone's actual command
+        self.send_command(rc_command)
+
+    def receive_response(self):
+        try:
+            self.socket.settimeout(2)  # Add timeout for waiting for response
+            response, _ = self.socket.recvfrom(1024)  # Buffer size of 1024 bytes
+            return response.decode('utf-8')
+        except socket.timeout:
+            print("[ERROR] Timeout waiting for drone response.")
+            return ""
+
+# === Initialization ===
+drone = JeasoumE58Drone(ip="192.168.10.1", port=8889)
+drone.connect()
+
+# === Battery Check ===
+battery = drone.get_battery()
+print(f"[JEASOUM E58] Battery: {battery}%")
+
+# === Takeoff Process ===
+drone.takeoff()
+
+is_flying = drone.flying  # Set flight status after takeoff
+if not is_flying:
+    print("[ERROR] Drone failed to take off!")
+else:
+    print("[INFO] Drone is in the air!")
+# === Define a placeholder for the `nothing` function used for trackbars ===
+def nothing(x):
+    pass
+# === Create Trackbars ===
+cv2.namedWindow("Trackbars")
+cv2.createTrackbar("H Min", "Trackbars", 0, 179, nothing)
+cv2.createTrackbar("S Min", "Trackbars", 0, 255, nothing)
+cv2.createTrackbar("V Min", "Trackbars", 0, 255, nothing)
+cv2.createTrackbar("H Max", "Trackbars", 179, 179, nothing)
+cv2.createTrackbar("S Max", "Trackbars", 255, 255, nothing)
+cv2.createTrackbar("V Max", "Trackbars", 255, 255, nothing)
+
+
+
+# === Main Loop ===
+try:
+    while True:
+        frame = drone.get_frame()  # Get frame from JEASOUM E58 drone
+        if frame is None:
+            print("[ERROR] No frame received!")
+            continue
+
+        # Debug: Check if frame is being received correctly
+        print("[DEBUG] Frame shape:", frame.shape)
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # === HSV Trackbar Detection ===
+        h_min = cv2.getTrackbarPos("H Min", "Trackbars")
+        s_min = cv2.getTrackbarPos("S Min", "Trackbars")
+        v_min = cv2.getTrackbarPos("V Min", "Trackbars")
+        h_max = cv2.getTrackbarPos("H Max", "Trackbars")
+        s_max = cv2.getTrackbarPos("S Max", "Trackbars")
+        v_max = cv2.getTrackbarPos("V Max", "Trackbars")
+        lower_pink = np.array([h_min, s_min, v_min])
+        upper_pink = np.array([h_max, s_max, v_max])
+
+        # === Keyboard Controls ===
+        speed_multiplier = 1.5 if keyboard.is_pressed('shift') else 1
+        base_speed_fb_lr = int(60 * speed_multiplier)
+        base_speed_ud_yaw = int(100 * speed_multiplier)
+
+        left_right_velocity = 0
+        forward_backward_velocity = 0
+        up_down_velocity = 0
+        yaw_velocity = 0
+
+        # Movement keys
+        if keyboard.is_pressed('w'):
+            forward_backward_velocity = base_speed_fb_lr
+        elif keyboard.is_pressed('s'):
+            forward_backward_velocity = -base_speed_fb_lr
+        if keyboard.is_pressed('a'):
+            left_right_velocity = -base_speed_fb_lr
+        elif keyboard.is_pressed('d'):
+            left_right_velocity = base_speed_fb_lr
+        if keyboard.is_pressed('up'):
+            up_down_velocity = base_speed_ud_yaw
+        elif keyboard.is_pressed('down'):
+            up_down_velocity = -base_speed_ud_yaw
+        if keyboard.is_pressed('left'):
+            yaw_velocity = -base_speed_ud_yaw
+        elif keyboard.is_pressed('right'):
+            yaw_velocity = base_speed_ud_yaw
+        if keyboard.is_pressed(';') and is_flying and time.time() - drone.last_flip_time > 3:
+            if drone.get_battery() > 30:
+                print("[COMMAND] Backflip initiated...")
+                drone.flip_back()
+                drone.last_flip_time = time.time()
+            else:
+                print("[WARNING] Flip aborted: low battery or altitude.")
+
+        # Takeoff / Land
+        if keyboard.is_pressed('l') and time.time() - drone.last_l_press_time > 2:
+            if not is_flying:
+                print("[COMMAND] Taking off...")
+                drone.takeoff()
+                is_flying = True
+            else:
+                print("[COMMAND] Landing...")
+                drone.land()
+                is_flying = False
+            drone.last_l_press_time = time.time()
+
+        # Send RC Control
+        drone.send_rc_control(left_right_velocity, forward_backward_velocity, up_down_velocity, yaw_velocity)
+
+        cv2.imshow("Jeasoum E58 Drone Control", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+except KeyboardInterrupt:
+    print("[INFO] Interrupted by user.")
+finally:
+    if is_flying:
+        drone.land()
+    cv2.destroyAllWindows()
